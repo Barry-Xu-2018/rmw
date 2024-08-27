@@ -2033,6 +2033,79 @@ rmw_send_request(
   const void * ros_request,
   int64_t * sequence_id);
 
+/// Send a serialized service request.
+/**
+ * Send a serialized service request to one or more service servers, with matching QoS policies,
+ * using the given client.
+ *
+ * \note It is implementation defined how many service servers may get, and potentially react to,
+ *   the same request, considering there may be more than one server for the same service
+ *   in the ROS graph.
+ *
+ * On success, this function will return a sequence number.
+ * It is up to callers to save the returned sequence number to pair the serialized service request
+ * just sent with future serialized service responses (taken using
+ * rmw_take_response()/rmw_take_serialized_response()).
+ *
+ * <hr>
+ * Attribute          | Adherence
+ * ------------------ | -------------
+ * Allocates Memory   | Maybe
+ * Thread-Safe        | Yes
+ * Uses Atomics       | Maybe [1]
+ * Lock-Free          | Maybe [1]
+ *
+ * <i>[1] implementation defined, check implementation documentation.</i>
+ *
+ * \par Runtime behavior
+ *   It is implementation defined whether sending a serialized service request is a
+ *   synchronous or asynchronous, and blocking or non-blocking, operation.
+ *   However, asynchronous implementations are not allowed to access the
+ *   given serialized service request after this function returns.
+ *   Check the implementation documentation to learn about request behavior.
+ *
+ * \par Memory allocation
+ *   It is implementation defined whether memory will be allocated on send or not.
+ *   Check the implementation documentation to learn about memory allocation
+ *   guarantees when sending a serialized request with and without service client allocations.
+ *
+ * \par Thread-safety
+ *   Service clients are thread-safe objects, and so are all operations on them except for
+ *   finalization.
+ *   Therefore, it is safe to send requests using the same service client concurrently.
+ *   However:
+ *   - Access to the given serialized service request is read-only but it is not synchronized.
+ *     Concurrent `serialized_request` reads are safe, but concurrent reads and writes are not.
+ *   - Access to given primitive data-type arguments is not synchronized.
+ *     It is not safe to read or write `sequence_id` while
+ *     rmw_send_request()/rmw_send_serialized_request() uses it.
+ *
+ * \pre Given `client` must be a valid client, as returned by rmw_create_client().
+ * \pre Given `serialized_request` must be a valid serialized service request, initialized by
+ *   rmw_serialized_message_init() and containing the serialization of a ROS service request whose
+ *   type matches the service message type support registered with the `client` on creation.
+ *
+ * \param[in] client Service client to send a request with.
+ * \param[in] serialized_request serialized service request to be sent.
+ * \param[out] sequence_id Sequence number for the `ros_request` just sent
+ *   i.e. a unique identification number for it, populated on success.
+ * \return `RMW_RET_OK` if successful, or
+ * \return `RMW_RET_BAD_ALLOC` if memory allocation fails, or
+ * \return `RMW_RET_INVALID_ARGUMENT` if `client` is NULL, or
+ * \return `RMW_RET_INVALID_ARGUMENT` if `ros_serialized_request` is NULL, or
+ * \return `RMW_RET_INVALID_ARGUMENT` if `sequence_id` is NULL, or
+ * \return `RMW_RET_INCORRECT_RMW_IMPLEMENTATION` if the `client`
+ *   implementation identifier does not match this implementation, or
+ * \return `RMW_RET_ERROR` if an unexpected error occurs.
+ */
+RMW_PUBLIC
+RMW_WARN_UNUSED
+rmw_ret_t
+rmw_send_serialized_request(
+  const rmw_client_t * client,
+  const rmw_serialized_message_t * serialized_request,
+  int64_t * sequence_id);
+
 /// Take an incoming ROS service response.
 /**
  * Take a ROS service response already received by the given service server, removing
@@ -2117,6 +2190,94 @@ rmw_take_response(
   const rmw_client_t * client,
   rmw_service_info_t * request_header,
   void * ros_response,
+  bool * taken);
+
+/// Take an incoming serialized service response.
+/**
+ * Take a serialized service response already received by the given service server, removing
+ * it from internal queues.
+ * The response header (i.e. its metadata), containing at least the writer guid and sequence number,
+ * is also retrieved.
+ * Both writer guid and sequence number allow callers to pair, potentially for each remote service
+ * server, a ROS service response with its corresponding ROS service request, previously sent using
+ * rmw_send_request()/rmw_send_serialized_request().
+ *
+ * \note It is implementation defined how many responses a given request may get,
+ *   considering there may be more than one server for the same service in the ROS graph.
+ *
+ * This function will succeed even if no serialized service request was received,
+ * but `taken` will be false.
+ *
+ * \remarks The same serialized service response cannot be taken twice.
+ *   Callers do not have to deal with duplicates.
+ *
+ * <hr>
+ * Attribute          | Adherence
+ * ------------------ | -------------
+ * Allocates Memory   | Maybe
+ * Thread-Safe        | Yes
+ * Uses Atomics       | Maybe [1]
+ * Lock-Free          | Maybe [1]
+ *
+ * <i>[1] implementation defined, check implementation documentation.</i>
+ *
+ * \par Runtime behavior
+ *   Taking a serialized service response is a synchronous operation.
+ *   It is also non-blocking, to the extent it will not wait for new ROS service responses
+ *   to arrive, but it is not guaranteed to be lock-free.
+ *   Generally speaking, implementations may synchronize access to internal resources using
+ *   locks but are not allowed to wait for events with no guaranteed time bound (barring
+ *   the effects of starvation due to OS scheduling).
+ *
+ * \par Memory allocation
+ *   It is implementation defined whether memory will be allocated on take or not.
+ *   Check the implementation documentation to learn about memory allocation guarantees
+ *   when taking serialized ROS response with and without service client allocations.
+ *
+ * \par Thread-safety
+ *   Service clients are thread-safe objects, and so are all operations on them except for
+ *   finalization.
+ *   Therefore, it is safe to take responses from the same service client concurrently.
+ *   However:
+ *   - Access to the given serialized service response is not synchronized.
+ *     It is not safe to read or write `serialized_response` while
+ *     rmw_take_request()/rmw_take_serialized_request() uses it.
+ *   - Access to the given serialized service response header is not synchronized.
+ *     It is not safe to read or write `response_header` while
+ *     rmw_take_response()/rmw_take_serialized_request() uses it.
+ *   - Access to given primitive data-type arguments is not synchronized.
+ *     It is not safe to read or write `taken` while
+ *     rmw_take_response()/rmw_take_serialized_request() uses it.
+ *
+ * \pre Given `client` must be a valid client, as returned by rmw_create_client().
+ * \pre Given `serialized_response` must be a valid serialized service response, whose type
+ *   matches the service type support registered with the `client` on creation.
+ * \post Given `serialized_response` will remain a valid serialized service response.
+ *   It will be left unchanged if this function fails early due to a logical error, such as an
+ *   invalid argument, or in an unknown yet valid state if it fails due to a runtime error.
+ *   It will also be left unchanged if this function succeeds but `taken` is false.
+ *
+ * \param[in] client Service client to take response from.
+ * \param[out] request_header Service response header to write to.
+ * \param[out] serialized_response Byte stream of serialized response to write to.
+ * \param[out] taken Boolean flag indicating if a ROS service response was taken or not.
+ * \return `RMW_RET_OK` if successful, or
+ * \return `RMW_RET_BAD_ALLOC` if memory allocation fails, or
+ * \return `RMW_RET_INVALID_ARGUMENT` if `client` is NULL, or
+ * \return `RMW_RET_INVALID_ARGUMENT` if `response_header` is NULL, or
+ * \return `RMW_RET_INVALID_ARGUMENT` if `serialized_response` is NULL, or
+ * \return `RMW_RET_INVALID_ARGUMENT` if `taken` is NULL, or
+ * \return `RMW_RET_INCORRECT_RMW_IMPLEMENTATION` if the `client`
+ *   implementation identifier does not match this implementation, or
+ * \return `RMW_RET_ERROR` if an unexpected error occurs.
+ */
+RMW_PUBLIC
+RMW_WARN_UNUSED
+rmw_ret_t
+rmw_take_serialized_response(
+  const rmw_client_t * client,
+  rmw_service_info_t * request_header,
+  rmw_serialized_message_t * serialized_response,
   bool * taken);
 
 /// Retrieve the actual qos settings of the client's request publisher.
@@ -2285,7 +2446,7 @@ rmw_destroy_service(rmw_node_t * node, rmw_service_t * service);
  * sequence number, is also retrieved.
  * Both writer guid and sequence number allow callers to pair, for each remote service
  * client, a ROS service request with its corresponding ROS service response, to be later
- * sent using rmw_send_response().
+ * sent using rmw_send_response()/rmw_send_serialized_response().
  *
  * This function will succeed even if no ROS service request was received,
  * but `taken` will be false.
@@ -2360,6 +2521,91 @@ rmw_take_request(
   void * ros_request,
   bool * taken);
 
+/// Take an incoming serialized service request.
+/**
+ * Take a serialized service request already received by the given service server, removing
+ * it from internal queues.
+ * The request header (i.e. its metadata), containing at least the writer guid and
+ * sequence number, is also retrieved.
+ * Both writer guid and sequence number allow callers to pair, for each remote service
+ * client, a ROS service request with its corresponding ROS service response, to be later
+ * sent using rmw_send_response()/rmw_send_serialized_response().
+ *
+ * This function will succeed even if no serialized service request was received,
+ * but `taken` will be false.
+ *
+ * \remarks The same serialized service request cannot be taken twice.
+ *   Callers do not have to deal with duplicates.
+ *
+ * <hr>
+ * Attribute          | Adherence
+ * ------------------ | -------------
+ * Allocates Memory   | Maybe
+ * Thread-Safe        | Yes
+ * Uses Atomics       | Maybe [1]
+ * Lock-Free          | Maybe [1]
+ *
+ * <i>[1] implementation defined, check implementation documentation.</i>
+ *
+ * \par Runtime behavior
+ *   Taking a serialized service request is a synchronous operation.
+ *   It is also non-blocking, to the extent it will not wait for new ROS service requests
+ *   to arrive, but it is not guaranteed to be lock-free.
+ *   Generally speaking, implementations may synchronize access to internal resources using
+ *   locks but are not allowed to wait for events with no guaranteed time bound (barring
+ *   the effects of starvation due to OS scheduling).
+ *
+ * \par Memory allocation
+ *   It is implementation defined whether memory will be allocated on take or not.
+ *   Check the implementation documentation to learn about memory allocation guarantees
+ *   when taking serialized ROS request with and without service server allocations.
+ *
+ * \par Thread-safety
+ *   Service servers are thread-safe objects, and so are all operations on them except for
+ *   finalization.
+ *   Therefore, it is safe to take requests from the same service server concurrently.
+ *   However:
+ *   - Access to the given serialized service request is not synchronized.
+ *     It is not safe to read or write `serialized_request` while
+ *     rmw_take_request()/rmw_take_serialized_request() uses it.
+ *   - Access to the given serialized service request header is not synchronized.
+ *     It is not safe to read or write `request_header` while
+ *     rmw_take_request()/rmw_take_serialized_request() uses it.
+ *   - Access to given primitive data-type arguments is not synchronized.
+ *     It is not safe to read or write `taken` while
+ *     rmw_take_request()/rmw_take_serialized_request() uses it.
+ *
+ * \pre Given `service` must be a valid service, as returned by rmw_create_service().
+ * \pre Given `serialized_request` must be a valid serialized service request, whose type
+ *   matches the service type support registered with the `service` on creation.
+ * \post Given `serialized_request` will remain a serialized valid service request.
+ *   It will be left unchanged if this function fails early due to a logical error, such as an
+ *   invalid argument, or in an unknown yet valid state if it fails due to a runtime error.
+ *   It will also be left unchanged if this function succeeds but `taken` is false.
+ *
+ * \param[in] service Service server to take request from.
+ * \param[out] request_header Service request header to write to.
+ * \param[out] serialized_request Byte stream of serialized request to write to.
+ * \param[out] taken Boolean flag indicating if a serialized service request was taken or not.
+ * \return `RMW_RET_OK` if successful, or
+ * \return `RMW_RET_BAD_ALLOC` if memory allocation fails, or
+ * \return `RMW_RET_INVALID_ARGUMENT` if `service` is NULL, or
+ * \return `RMW_RET_INVALID_ARGUMENT` if `request_header` is NULL, or
+ * \return `RMW_RET_INVALID_ARGUMENT` if `serialized_request` is NULL, or
+ * \return `RMW_RET_INVALID_ARGUMENT` if `taken` is NULL, or
+ * \return `RMW_RET_INCORRECT_RMW_IMPLEMENTATION` if the `service`
+ *   implementation identifier does not match this implementation, or
+ * \return `RMW_RET_ERROR` if an unexpected error occurs.
+ */
+RMW_PUBLIC
+RMW_WARN_UNUSED
+rmw_ret_t
+rmw_take_serialized_request(
+  const rmw_service_t * service,
+  rmw_service_info_t * request_header,
+  rmw_serialized_message_t * serialized_request,
+  bool * taken);
+
 /// Send a ROS service response.
 /**
  * Send a ROS service response to the service client, with matching QoS policies,
@@ -2425,6 +2671,72 @@ rmw_send_response(
   const rmw_service_t * service,
   rmw_request_id_t * request_header,
   void * ros_response);
+
+/// Send a serialized service response.
+/**
+ * Send a serialized service response to the service client, with matching QoS policies,
+ * from which the previously taken ROS service request was originally sent.
+ *
+ * <hr>
+ * Attribute          | Adherence
+ * ------------------ | -------------
+ * Allocates Memory   | Maybe
+ * Thread-Safe        | Yes
+ * Uses Atomics       | Maybe [1]
+ * Lock-Free          | Maybe [1]
+ *
+ * <i>[1] implementation defined, check implementation documentation.</i>
+ *
+ * \par Runtime behavior
+ *   It is implementation defined whether sending a serialized service response is a synchronous
+ *   or asynchronous, and blocking or non-blocking, operation.
+ *   However, asynchronous implementations are not allowed to access the given ROS service request
+ *   after this function returns.
+ *   Check the implementation documentation to learn about request behavior.
+ *
+ * \par Memory allocation
+ *   It is implementation defined whether memory will be allocated on send or not.
+ *   Check the implementation documentation to learn about memory allocation
+ *   guarantees when sending a serialized response with and without service server allocations.
+ *
+ * \par Thread-safety
+ *   Service servers are thread-safe objects, and so are all operations on them except for
+ *   finalization.
+ *   Therefore, it is safe to send responses using the same service server concurrently.
+ *   However:
+ *   - Access to the given serialized service request header is read-only but it is not
+ *     synchronized.
+ *     Concurrent `request_header` reads are safe, but concurrent reads and writes are not.
+ *   - Access to the given serialized service response is read-only but it is not synchronized.
+ *     Concurrent `ros_request` reads are safe, but concurrent reads and writes are not.
+ *
+ * \pre Given `service` must be a valid service server, as returned by rmw_create_service().
+ * \pre Given `request_header` must be the one previously taken along with the ROS service
+ *   request to which we reply.
+ * \pre Given `serialized_response` must be a valid serialized service response, whose type
+ *   matches the service type support registered with the `service` on creation.
+ *
+ * \param[in] service Service server to send a response with.
+ * \param[in] request_header Service response header, same as the one taken
+ *   with the corresponding ROS service request.
+ * \param[in] serialized_response Serialized service response to be sent.
+ * \return `RMW_RET_OK` if successful, or
+ * \return `RMW_RET_BAD_ALLOC` if memory allocation fails, or
+ * \return `RMW_RET_INVALID_ARGUMENT` if `service` is NULL, or
+ * \return `RMW_RET_INVALID_ARGUMENT` if `request_header` is NULL, or
+ * \return `RMW_RET_INVALID_ARGUMENT` if `serialized_response` is NULL, or
+ * \return `RMW_RET_INCORRECT_RMW_IMPLEMENTATION` if the `service`
+ *   implementation identifier does not match this implementation, or
+ * \return `RMW_RET_TIMEOUT` if a response reader is not ready yet, or
+ * \return `RMW_RET_ERROR` if an unexpected error occurs.
+ */
+RMW_PUBLIC
+RMW_WARN_UNUSED
+rmw_ret_t
+rmw_send_serialized_response(
+  const rmw_service_t * service,
+  rmw_request_id_t * request_header,
+  const rmw_serialized_message_t * serialized_response);
 
 /// Retrieve the actual qos settings of the service's request subscription.
 /**
